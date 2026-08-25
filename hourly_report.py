@@ -6,7 +6,7 @@
   - 主源：CNBC 行情接口（一次批量请求覆盖全部标的）
   - 备源：Yahoo Finance chart API（CNBC 缺数据时逐个回退）
 
-推送：PushPlus，一条消息合并完整版报告。
+推送：PushPlus，仅触发告警时推送（个股 ±3% 或组合日盈亏 ±1.5%），无异常静默。
 环境变量：
   PUSHPLUS_TOKEN  PushPlus Token（GitHub Secret，勿写入代码）
 用法：
@@ -245,6 +245,7 @@ def build_report():
     )
     quotes = Quotes(all_symbols)
     lines = []
+    alert_hit = False
 
     def add(s=""):
         lines.append(s)
@@ -309,7 +310,10 @@ def build_report():
         try:
             q = quotes.get(sym)
             chg = q["change_pct"] or 0
-            flag = " ⚠️" if abs(chg) >= STOCK_ALERT else ""
+            flag = ""
+            if abs(chg) >= STOCK_ALERT:
+                flag = " ⚠️"
+                alert_hit = True
             pl = (q["last"] - cost) / cost * 100.0
             unit = " 港元" if sym.endswith(".HK") else " 美元"
             add("- {}（{:.1f}%仓）：现价 {:,.2f}{}，今日 {:+.2f}%{}（持仓 {:+.1f}%）".format(
@@ -324,7 +328,10 @@ def build_report():
         total_w = sum(w for _, w, _, _ in weighted)
         pf = sum(w * c for _, w, c, _ in weighted) / total_w
         pfl = sum(w * l for _, w, _, l in weighted) / total_w
-        flag = " ⚠️" if abs(pf) >= PORTFOLIO_ALERT else ""
+        flag = ""
+        if abs(pf) >= PORTFOLIO_ALERT:
+            flag = " ⚠️"
+            alert_hit = True
         add("### 组合")
         add()
         add("- 当日加权：{:+.2f}%{}".format(pf, flag))
@@ -352,8 +359,10 @@ def build_report():
         title += " 持仓{:+.1f}%".format(pfl)
     elif pf is not None:
         title += " 组合{:+.1f}%".format(pf)
+    if alert_hit:
+        title = "⚠️" + title
     title = title[:30]
-    return title, "\n".join(lines)
+    return title, "\n".join(lines), alert_hit
 
 
 def push_wechat(title, desp):
@@ -379,12 +388,16 @@ def push_wechat(title, desp):
 
 
 def main():
-    title, desp = build_report()
+    title, desp, alert = build_report()
     print("=" * 20 + " " + title + " " + "=" * 20)
     print(desp)
     print("=" * 52)
     if DRY_RUN:
         print("[dry-run] 未推送")
+        return
+    if not alert:
+        print("[skip] 无异常，本轮不推送（个股±{:.0f}%/组合±{:.1f}%未触发）".format(
+            STOCK_ALERT, PORTFOLIO_ALERT))
         return
     push_wechat(title, desp)
 
