@@ -6,7 +6,9 @@
   - 主源：CNBC 行情接口（一次批量请求覆盖全部标的）
   - 备源：Yahoo Finance chart API（CNBC 缺数据时逐个回退）
 
-推送：PushPlus，仅触发告警时推送（个股 ±3% 或组合日盈亏 ±1.5%），无异常静默。
+推送：PushPlus，仅触发异动告警时推送，无异常静默。告警阈值（任一触发即推送）：
+  个股 ±3% · 组合日盈亏 ±1.5% · 美债收益率日变动 ±8bp · 指数 ±1.5%
+  美元指数 ±1% · 黄金 ±1.5% · 原油 ±3%
 环境变量：
   PUSHPLUS_TOKEN  PushPlus Token（GitHub Secret，勿写入代码）
 用法：
@@ -33,8 +35,17 @@ UA = {
 }
 
 YIELDS = [
-    ("US10Y", "10Y"),
+    ("US1M", "1M"),
+    ("US3M", "3M"),
+    ("US6M", "6M"),
+    ("US1Y", "1Y"),
     ("US2Y", "2Y"),
+    ("US3Y", "3Y"),
+    ("US5Y", "5Y"),
+    ("US7Y", "7Y"),
+    ("US10Y", "10Y"),
+    ("US20Y", "20Y"),
+    ("US30Y", "30Y"),
 ]
 INDICES = [
     (".SPX", "标普500"),
@@ -65,6 +76,13 @@ HOLDINGS = [
 
 STOCK_ALERT = 3.0      # 个股涨跌幅告警阈值 %
 PORTFOLIO_ALERT = 1.5  # 组合日盈亏告警阈值 %
+YIELD_ALERT_BP = 8.0   # 美债收益率日变动告警阈值 bp
+INDEX_ALERT = 1.5      # 指数涨跌幅告警阈值 %
+MACRO_ALERT = {        # 宏观品种涨跌幅告警阈值 %
+    ".DXY": 1.0,   # 美元指数
+    "@GC.1": 1.5,  # 黄金
+    "@CL.1": 3.0,  # WTI 原油
+}
 
 
 # ---------------- 时间（不依赖 tzdata，兼容 Windows / Linux） ----------------
@@ -267,7 +285,11 @@ def build_report():
             q = quotes.get(sym)
             ys[label] = q
             bp = (q["change"] or 0) * 100
-            add("- {}：{:.3f}%（日变动 {:+.1f}bp，{}）".format(label, q["last"], bp, q["time"]))
+            flag = ""
+            if abs(bp) >= YIELD_ALERT_BP:
+                flag = " ⚠️"
+                alert_hit = True
+            add("- {}：{:.3f}%（日变动 {:+.1f}bp{}，{}）".format(label, q["last"], bp, flag, q["time"]))
         except Exception as e:  # noqa: BLE001
             add("- {}：数据获取失败（{}）".format(label, e))
     if "10Y" in ys and "2Y" in ys:
@@ -282,7 +304,12 @@ def build_report():
     for sym, name in INDICES:
         try:
             q = quotes.get(sym)
-            add("- {}：{:,.2f}（{:+.2f}%，{}）".format(name, q["last"], q["change_pct"] or 0, q["time"]))
+            chg = q["change_pct"] or 0
+            flag = ""
+            if abs(chg) >= INDEX_ALERT:
+                flag = " ⚠️"
+                alert_hit = True
+            add("- {}：{:,.2f}（{:+.2f}%{}，{}）".format(name, q["last"], chg, flag, q["time"]))
         except Exception as e:  # noqa: BLE001
             add("- {}：数据获取失败（{}）".format(name, e))
     add()
@@ -295,7 +322,13 @@ def build_report():
     for sym, name in MACRO:
         try:
             q = quotes.get(sym)
-            add("- {}：{:,.2f}（{:+.2f}%，{}）".format(name, q["last"], q["change_pct"] or 0, q["time"]))
+            chg = q["change_pct"] or 0
+            th = MACRO_ALERT.get(sym, 2.0)
+            flag = ""
+            if abs(chg) >= th:
+                flag = " ⚠️"
+                alert_hit = True
+            add("- {}：{:,.2f}（{:+.2f}%{}，{}）".format(name, q["last"], chg, flag, q["time"]))
         except Exception as e:  # noqa: BLE001
             add("- {}：数据获取失败（{}）".format(name, e))
     add()
@@ -396,8 +429,10 @@ def main():
         print("[dry-run] 未推送")
         return
     if not alert:
-        print("[skip] 无异常，本轮不推送（个股±{:.0f}%/组合±{:.1f}%未触发）".format(
-            STOCK_ALERT, PORTFOLIO_ALERT))
+        print("[skip] 无异常，本轮不推送（个股±{:.0f}%/组合±{:.1f}%/收益率±{:.0f}bp/指数±{:.1f}%/"
+              "美元±{:.1f}%/黄金±{:.1f}%/原油±{:.0f}% 均未触发）".format(
+                  STOCK_ALERT, PORTFOLIO_ALERT, YIELD_ALERT_BP, INDEX_ALERT,
+                  MACRO_ALERT[".DXY"], MACRO_ALERT["@GC.1"], MACRO_ALERT["@CL.1"]))
         return
     push_wechat(title, desp)
 
