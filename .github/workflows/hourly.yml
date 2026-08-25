@@ -1,0 +1,23 @@
+name: hourly-report
+
+on:
+  schedule:
+    # 每小时整点（UTC 0-17 点），即北京时间 8:00 至次日 1:59
+    # 北京时间凌晨 2:00-7:59（UTC 18-23 点）静默不推送
+    # GitHub 调度可能延迟几分钟，属正常现象
+    - cron: "0 0-17 * * *"
+  workflow_dispatch: {} # 允许手动触发测试
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run hourly report
+        env:
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+        run: python hourly_report.py
