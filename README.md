@@ -1,37 +1,81 @@
-# Stella 整点联合报告
+# Stella 联合报告
 
-每小时自动运行的行情联合报告。**仅触发异动告警时推送**（节省推送额度），无异常时静默只记录日志：
+每日两次自动运行的行情联合报告（晨报 + 盘前，北京时间），**每次都推送**，由 GitHub Actions 云端运行。
 
-- 告警条件（任一触发即推送，适用于所有板块）：
-  - 个股当日涨跌 **±3%**，或组合当日加权盈亏 **±1.5%**
-  - 美债收益率（任一期限）日变动 **±8bp**
-  - 三大指数当日涨跌 **±1.5%**
-  - 美元指数 **±1%** · 黄金 **±1.5%** · WTI 原油 **±3%**
-- 推送渠道：PushPlus 微信推送，一条消息合并完整版报告（标题带 ⚠️ 前缀）
+## 推送排期
 
-报告内容包含：
+| 时段 | 北京时间 | UTC cron | 说明 |
+|---|---|---|---|
+| 晨报 | 08:00 | `0 0 * * *` | 全年 |
+| 盘前（夏令时） | 20:30 | `30 12 * * *` | 美股 21:30 开盘前 1 小时 |
+| 盘前（冬令时） | 21:30 | `30 13 * * *` | 美股 22:30 开盘前 1 小时 |
 
-- 美债收益率全曲线：1M / 3M / 6M / 1Y / 2Y / 3Y / 5Y / 7Y / 10Y / 20Y / 30Y（含 10Y-2Y 利差）
-- 美股三大指数（标普 / 道指 / 纳指）
-- 美元指数 · 黄金 · WTI 原油
-- 13 只持仓最新价与当日涨跌（±3% 异动 ⚠️ 标注）
-- 组合加权日盈亏（±1.5% ⚠️ 标注）及贡献前 3
+盘前两个触发点同时挂载，脚本内按美国夏令时规则（3 月第二个周日 ～ 11 月第一个周日）自动取舍，错季的触发点静默跳过，无需人工切换。
 
-不含（无免费数据接口，由本地 WorkBuddy 会话补充）：FOMC 概率、个股新闻解读、财报与经济数据日程、霍尔木兹海峡通船数。
+## 推送策略（2026-08-26 更新）
 
-## 部署步骤
+每日两次推送，所有内容合并为一条消息：
 
-1. 将本目录推送到 GitHub（建议私有仓库）。
-2. 仓库 Settings → Secrets and variables → Actions → New repository secret：
-   - Name：`PUSHPLUS_TOKEN`
-   - Value：PushPlus Token（[www.pushplus.plus](https://www.pushplus.plus) 获取）
-3. Actions 页确认 `hourly-report` 工作流已启用；可点 Run workflow 手动触发一次测试。
-4. 之后每小时整点自动运行（北京时间 8:00 至次日 1:59，凌晨 2:00-7:59 静默，cron `0 0-17 * * *`，GitHub 调度可能延迟几分钟）；**仅触发告警时推送**，无异常不推送。
+**每次都推（常规数据）：**
+
+- 美债收益率：1Y / 2Y / 5Y / 10Y / 30Y（含 10Y-2Y 利差）
+- 美元指数 · 黄金 COMEX · WTI 原油
+
+**仅触发异动时展示（异动部分）：**
+
+- 个股 ±3%（仅展示触发阈值的持仓，无异动则整段跳过）
+- 组合当日加权 ±1.5%（触发时展示，含贡献前 3）
+- 三大指数 ±1.5%（触发时展示）
+
+### 阈值一览
+
+| 项目 | 阈值 |
+|---|---|
+| 个股当日涨跌 | ±3% |
+| 组合当日加权 | ±1.5% |
+| 三大指数 | ±1.5% |
+| 美债收益率日变动 | ±8bp（仅标注 ⚠️） |
+| 美元指数 | ±1%（仅标注 ⚠️） |
+| 黄金 | ±1.5%（仅标注 ⚠️） |
+| WTI 原油 | ±3%（仅标注 ⚠️） |
+
+> ⚠️ 标注仅作视觉提示，不影响推送逻辑——收益率和美元/黄金/原油板块每次都推。
+
+## 推送渠道（双通道免费额度调度）
+
+两个都是免费账户，脚本自动调度：
+
+1. **PushPlus**（主）：`https://www.pushplus.plus/send`，JSON POST，template=markdown，成功码 `code==200`
+2. **方糖 Server酱**（备）：`https://sctapi.ftqq.com/<SENDKEY>.send`，成功码 `code==0`
+
+先走 PushPlus；额度用尽或请求失败时自动回退方糖，两者都失败才判定推送失败（exit 1）。
+
+Token 均走环境变量 / GitHub Secrets，**禁止写入代码**：
+
+- `PUSHPLUS_TOKEN` — PushPlus Token
+- `SERVERCHAN_KEY` — 方糖 SendKey（`SCT` 开头）
+
+## 持仓维护
+
+`hourly_report.py` 顶部 `HOLDINGS` 列表维护持仓（ticker、权重%、平均成本）。
+Stella 每天上午发持仓截图 → 福福更新本文件并推送 GitHub → 云端自动生效。
+不发截图则沿用昨日持仓。
+
+## 部署
+
+仓库：`ProfessionalPlayeronEarth/Stock-summary-and-alert`
+
+1. Settings → Secrets and variables → Actions → New repository secret：
+   - `PUSHPLUS_TOKEN`
+   - `SERVERCHAN_KEY`
+2. Actions 页确认 `stella-report` 工作流已启用；可点 Run workflow 手动触发测试。
+3. 之后每日自动运行（见上方推送排期表）。
 
 ## 本地测试
 
 ```bash
 export PUSHPLUS_TOKEN=xxxx           # Windows PowerShell: $env:PUSHPLUS_TOKEN="xxxx"
+export SERVERCHAN_KEY=SCTxxxx        # Windows PowerShell: $env:SERVERCHAN_KEY="SCTxxxx"
 python hourly_report.py --dry       # 只打印不推送
 python hourly_report.py             # 打印并推送
 ```
