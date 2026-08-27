@@ -1,11 +1,15 @@
-name: hourly-report
+name: stella-report
 
 on:
   schedule:
-    # 每小时整点（UTC 0-17 点），即北京时间 8:00 至次日 1:59
-    # 北京时间凌晨 2:00-7:59（UTC 18-23 点）静默不推送
-    # GitHub 调度可能延迟几分钟，属正常现象
-    - cron: "0 0-17 * * *"
+    # 每日两次（北京时间）：
+    # 8:00 BJ  = 0:00 UTC  — 晨报（全年）
+    # 20:30 BJ = 12:30 UTC — 盘前（夏令时）
+    # 21:30 BJ = 13:30 UTC — 盘前（冬令时）
+    # 盘前两个触发点同时挂载，脚本内按美国夏令时规则自动取舍，错季静默跳过
+    - cron: "0 0 * * *"
+    - cron: "30 12 * * *"
+    - cron: "30 13 * * *"
   workflow_dispatch: {} # 允许手动触发测试
 
 jobs:
@@ -17,7 +21,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Run hourly report
+      - name: Run report
         env:
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+          SERVERCHAN_KEY: ${{ secrets.SERVERCHAN_KEY }}
         run: python hourly_report.py
