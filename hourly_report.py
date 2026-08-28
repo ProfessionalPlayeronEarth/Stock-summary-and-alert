@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Stella 联合报告 — 每日两次（晨报 8:00 + 盘前 20:30 北京时间）
+"""Stella 联合报告 — 每日两次（晨报 9:00 + 盘前 20:30 北京时间）
 
 数据来源（免费、无需 API Key）：
   - 主源：CNBC 行情接口（一次批量请求覆盖全部标的）
@@ -18,8 +18,8 @@
     PUSHPLUS_TOKEN   PushPlus Token
     SERVERCHAN_KEY   方糖 Server酱 SendKey（SCT 开头）
 
-排期（北京时间，每日两次）：
-  08:00 晨报（全年）
+排期（北京时间，每日两次，均由 GitHub Actions 云端触发，不依赖本地电脑开机）：
+  09:00 晨报（全年，1:00 UTC —— 避开 0:00 UTC 全球拥堵时段，降低丢跑概率）
   盘前报告：夏令时 20:30 / 冬令时 21:30 —— workflow 同时挂 12:30/13:30 UTC
   两个触发点，脚本按美国夏令时规则自动判断，错季的触发点静默跳过。
 
@@ -474,7 +474,7 @@ def push_wechat(title, desp):
 def premarket_gate():
     """盘前触发点 DST 自适应：BJ 20:30 与 21:30 两个 cron 都会触发，
     仅保留与当前美国夏令时状态匹配的那个，另一个静默跳过。
-    早上 8:00 晨报与其他任意时刻（手动触发）不拦截。"""
+    早上 9:00 晨报与其他任意时刻（手动触发）不拦截。"""
     bj = now_bj()
     hhmm = bj.hour * 60 + bj.minute
     if not (20 * 60 + 15 <= hhmm <= 21 * 60 + 45):
