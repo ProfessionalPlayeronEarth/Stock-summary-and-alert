@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Stella 联合报告 — 每日两次（晨报 9:00 + 盘前 20:30 北京时间）
+"""Stella 行情报告（云端简易版）— 四个任务槽位，云端 + 本地双轨运行
 
 数据来源（免费、无需 API Key）：
   - 主源：CNBC 行情接口（一次批量请求覆盖全部标的）
   - 备源：Yahoo Finance chart API（CNBC 缺数据时逐个回退）
 
-推送策略（2026-08-26 更新）：
-  每次都推送，内容分两部分：
-  ① 常规数据（每次都推）：美债收益率 1Y/2Y/5Y/10Y/30Y、美元指数、黄金、WTI 原油
-  ② 异动部分（仅触发时推）：个股 ±3%、组合 ±1.5%、指数 ±1.5%
-     未触发阈值的个股/指数不出现在报告中
+任务槽位（北京时间；云端简易版确保微信必达，本地深度版同时段并行）：
+  morning   晨报       09:00 全年（1:00 UTC，避开 0:00 UTC 全球拥堵时段）
+  hormuz    霍尔木兹   16:00 全年（8:00 UTC，原油/美元/黄金简易快照）
+  premarket 盘前       夏令时 20:30 / 冬令时 21:30（12:30/13:30 UTC 双触发，
+                        脚本按美国夏令时规则自动取舍，错季静默跳过）
+
+推送策略：
+  常规数据每次都推：美债收益率 1Y/2Y/5Y/10Y/30Y、美元指数、黄金、WTI 原油；
+  异动部分仅触发时推：个股 ±3%、组合 ±1.5%、指数 ±1.5%。
 
 推送（双通道，免费额度调度）：
   先走 PushPlus；额度用尽或失败时自动回退方糖 Server酱，两者都失败才算失败。
@@ -18,14 +22,10 @@
     PUSHPLUS_TOKEN   PushPlus Token
     SERVERCHAN_KEY   方糖 Server酱 SendKey（SCT 开头）
 
-排期（北京时间，每日两次，均由 GitHub Actions 云端触发，不依赖本地电脑开机）：
-  09:00 晨报（全年，1:00 UTC —— 避开 0:00 UTC 全球拥堵时段，降低丢跑概率）
-  盘前报告：夏令时 20:30 / 冬令时 21:30 —— workflow 同时挂 12:30/13:30 UTC
-  两个触发点，脚本按美国夏令时规则自动判断，错季的触发点静默跳过。
-
 用法：
-  python hourly_report.py --dry   # 只打印，不推送
-  python hourly_report.py         # 打印并推送
+  python hourly_report.py --dry            # 只打印，不推送（槽位按当前时间自动判断）
+  python hourly_report.py                  # 打印并推送
+  SLOT=hormuz python hourly_report.py      # 强制指定槽位（workflow_dispatch 测试用）
 """
 
 import datetime
@@ -64,6 +64,26 @@ MACRO = [
     ("@GC.1", "黄金COMEX"),
     ("@CL.1", "WTI原油"),
 ]
+# 霍尔木兹简易版观察清单（原油为主）: (symbol, 名称, 异动阈值%)
+HORMUZ_MACRO = [
+    ("@CL.1", "WTI原油", 3.0),
+    ("@BZ.1", "布伦特原油", 3.0),
+    (".DXY", "美元指数", 1.0),
+    ("@GC.1", "黄金COMEX", 1.5),
+]
+# CNBC 期货符号 → Yahoo 备源符号（CNBC 缺数据时用）
+YAHOO_ALIAS = {
+    "@CL.1": "CL=F",
+    "@BZ.1": "BZ=F",
+    "@GC.1": "GC=F",
+    ".DXY": "DX-Y.NYB",
+}
+# 任务槽位 → 报告名称（「联合报告」品牌已退役）
+SLOT_NAMES = {
+    "morning": "晨报",
+    "premarket": "盘前总结",
+    "hormuz": "霍尔木兹监测",
+}
 HOLDINGS = [
     # (ticker, weight%, avg_cost) — 2026-08-24 更新
     ("GLD", 39.06, 425.91),
@@ -252,7 +272,7 @@ class Quotes:
         if symbol in self.cache:
             return self.cache[symbol]
         try:
-            q = yahoo_quote(symbol)
+            q = yahoo_quote(YAHOO_ALIAS.get(symbol, symbol))
             self.cache[symbol] = q
             return q
         except Exception as e:  # noqa: BLE001
@@ -261,7 +281,7 @@ class Quotes:
 
 # ---------------- 报告 ----------------
 
-def build_report():
+def build_report(slot="morning"):
     now_et_ = now_et()
     now_bj_ = now_bj()
     all_symbols = (
@@ -271,11 +291,12 @@ def build_report():
     quotes = Quotes(all_symbols)
     lines = []
     alert_hit = False
+    slot_name = SLOT_NAMES.get(slot, "行情报告")
 
     def add(s=""):
         lines.append(s)
 
-    add("### 联合报告")
+    add("### {}（云端数据版）".format(slot_name))
     add()
     add("- 北京时间：{}".format(now_bj_.strftime("%Y-%m-%d %H:%M")))
     add("- 美东时间：{}（{}）".format(now_et_.strftime("%Y-%m-%d %H:%M"), market_status(now_et_)))
@@ -401,7 +422,7 @@ def build_report():
     add()
     add("数据来源：CNBC · Yahoo Finance（自动抓取，仅供参考，不构成投资建议）")
 
-    title = "联合报告 " + now_bj_.strftime("%m-%d %H:%M")
+    title = "{} ".format(slot_name) + now_bj_.strftime("%m-%d %H:%M")
     if pfl is not None:
         title += " 持仓{:+.1f}%".format(pfl)
     elif pf is not None:
@@ -488,17 +509,93 @@ def premarket_gate():
     return True
 
 
+def build_hormuz_simple():
+    """霍尔木兹云端简易版（16:00 BJ）：原油/美元/黄金快照，确保微信必达。
+    通船量、管道绕行、港口库存、地缘事件等六维深度分析由本地福福深度版承担。"""
+    now_et_ = now_et()
+    now_bj_ = now_bj()
+    quotes = Quotes([s for s, _, _ in HORMUZ_MACRO])
+    lines = []
+    alert_hit = False
+    oil_pct = None
+
+    def add(s=""):
+        lines.append(s)
+
+    add("### 霍尔木兹监测 · 简易版（云端）")
+    add()
+    add("- 北京时间：{}".format(now_bj_.strftime("%Y-%m-%d %H:%M")))
+    add("- 美东时间：{}（{}）".format(now_et_.strftime("%Y-%m-%d %H:%M"), market_status(now_et_)))
+    add()
+    add("---")
+    add()
+    add("### 原油 · 美元 · 黄金")
+    add()
+    for sym, name, th in HORMUZ_MACRO:
+        try:
+            q = quotes.get(sym)
+            chg = q["change_pct"] or 0
+            flag = ""
+            if abs(chg) >= th:
+                flag = " ⚠️"
+                alert_hit = True
+            if sym == "@CL.1":
+                oil_pct = chg
+            add("- {}：{:,.2f}（{:+.2f}%{}，{}）".format(name, q["last"], chg, flag, q["time"]))
+        except Exception as e:  # noqa: BLE001
+            add("- {}：数据获取失败（{}）".format(name, e))
+    add()
+    add("---")
+    add()
+    add("### 说明")
+    add()
+    add("- 本条为云端简易版，每日 16:00 定时推送，确保微信必达")
+    add("- 通船量 / 管道绕行 / 港口库存 / 地缘事件等六维深度分析，见本地福福深度版推送")
+    add()
+    add("---")
+    add()
+    add("数据来源：CNBC · Yahoo Finance（自动抓取，仅供参考，不构成投资建议）")
+
+    title = "霍尔木兹 " + now_bj_.strftime("%m-%d %H:%M")
+    if oil_pct is not None:
+        title += " 原油{:+.1f}%".format(oil_pct)
+    if alert_hit:
+        title = "⚠️" + title
+    return title[:30], "\n".join(lines), alert_hit
+
+
+def detect_slot():
+    """确定本次运行的任务槽位：优先环境变量 SLOT（workflow_dispatch 手动指定），
+    否则按北京时间自动推断：9 点档=晨报，16 点档=霍尔木兹，20/21 点档=盘前。"""
+    forced = os.environ.get("SLOT", "").strip().lower()
+    if forced in SLOT_NAMES:
+        return forced
+    bj = now_bj()
+    if 8 <= bj.hour < 11:
+        return "morning"
+    if 15 <= bj.hour < 17:
+        return "hormuz"
+    if bj.hour in (20, 21):
+        return "premarket"
+    return "morning"  # 手动触发等未知时刻，按晨报全量处理
+
+
 def main():
-    if not premarket_gate():
-        return
-    title, desp, alert = build_report()
+    slot = detect_slot()
+    print("[slot] 本次任务槽位：{}".format(slot))
+    if slot == "hormuz":
+        title, desp, alert = build_hormuz_simple()
+    else:
+        if slot == "premarket" and not premarket_gate():
+            return
+        title, desp, alert = build_report(slot)
     print("=" * 20 + " " + title + " " + "=" * 20)
     print(desp)
     print("=" * 52)
     if DRY_RUN:
         print("[dry-run] 未推送")
         return
-    # 每次都推送（每日仅运行两次：晨报 + 盘前）
+    # 每次都推送（每日四个槽位：晨报 9:00 / 霍尔木兹 16:00 / 盘前 20:30|21:30）
     ok = push_wechat(title, desp)
     if not ok:
         print("[!!] 双通道推送均失败")
